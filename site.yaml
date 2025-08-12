@@ -1,0 +1,31 @@
+---
+- name: Common prep on all nodes
+  hosts: all
+  roles:
+    - common
+
+- name: Configure HAProxy on LB
+  hosts: lb
+  roles:
+    - lb
+
+- name: Bootstrap first control-plane and install CNI
+  hosts: "{{ groups['control_plane'][0] }}"
+  roles:
+    - control_plane
+
+- name: Join remaining control-planes
+  hosts: "{{ groups['control_plane'][1:] }}"
+  roles:
+    - control_plane
+
+- name: Join workers
+  hosts: workers
+  roles:
+    - workers
+
+- name: Post-setup checks
+  hosts: "{{ groups['control_plane'][0] }}"
+  roles:
+    - postsetup
+

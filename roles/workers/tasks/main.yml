@@ -1,0 +1,12 @@
+---
+- name: Wait for API via LB
+  wait_for:
+    host: "{{ control_plane_endpoint.split(':')[0] }}"
+    port: "{{ control_plane_endpoint.split(':')[1] | int }}"
+    timeout: 600
+
+- name: Join worker to cluster
+  shell: "{{ hostvars[groups['control_plane'][0]].worker_join_cmd }}"
+  args:
+    creates: /etc/kubernetes/kubelet.conf
+

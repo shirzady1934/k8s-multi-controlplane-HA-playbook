@@ -1,0 +1,10 @@
+---
+- name: Restart containerd
+  systemd:
+    name: containerd
+    state: restarted
+
+- name: Apt update
+  apt:
+    update_cache: yes
+

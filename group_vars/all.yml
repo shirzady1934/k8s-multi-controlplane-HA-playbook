@@ -1,0 +1,11 @@
+ansible_user: ubuntu
+ansible_become: true
+
+# K8s
+kubernetes_version: "1.29"
+pod_network_cidr: "192.168.0.0/16"
+control_plane_endpoint: "10.0.0.10:6443"   # LB IP:port or DNS:6443
+
+# CNI (Calico)
+calico_manifest_url: "https://raw.githubusercontent.com/projectcalico/calico/v3.27.3/manifests/calico.yaml"
+

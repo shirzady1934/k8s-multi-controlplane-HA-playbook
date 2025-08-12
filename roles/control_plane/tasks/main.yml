@@ -1,0 +1,85 @@
+---
+# This role is used for both the first CP (init) and the others (join).
+
+- name: Wait for LB to be reachable (if present)
+  wait_for:
+    host: "{{ control_plane_endpoint.split(':')[0] }}"
+    port: "{{ control_plane_endpoint.split(':')[1] | int }}"
+    timeout: 600
+  when: control_plane_endpoint is defined
+
+# First control plane does kubeadm init + CNI + exports join cmds.
+- name: Create kubeadm config for HA
+  copy:
+    dest: /tmp/kubeadm-config.yaml
+    content: |
+      apiVersion: kubeadm.k8s.io/v1beta4
+      kind: ClusterConfiguration
+      kubernetesVersion: "v{{ kubernetes_version }}"
+      controlPlaneEndpoint: "{{ control_plane_endpoint }}"
+      networking:
+        podSubnet: "{{ pod_network_cidr }}"
+      ---
+      apiVersion: kubeproxy.config.k8s.io/v1alpha1
+      kind: KubeProxyConfiguration
+      mode: "ipvs"
+  when: inventory_hostname == groups['control_plane'][0]
+
+- name: Pull images (first CP)
+  command: kubeadm config images pull --config /tmp/kubeadm-config.yaml
+  when: inventory_hostname == groups['control_plane'][0]
+
+- name: kubeadm init (first CP)
+  command: kubeadm init --config /tmp/kubeadm-config.yaml --upload-certs
+  register: kubeadm_init
+  args:
+    creates: /etc/kubernetes/admin.conf
+  when: inventory_hostname == groups['control_plane'][0]
+
+- name: Setup kubeconfig for admin (first CP)
+  become_user: "{{ ansible_user }}"
+  shell: |
+    mkdir -p $HOME/.kube
+    sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
+    sudo chown $(id -u):$(id -g) $HOME/.kube/config
+  when: inventory_hostname == groups['control_plane'][0]
+
+- name: Parse join commands (first CP)
+  set_fact:
+    cp_join_cmd: "{{ kubeadm_init.stdout | regex_search('kubeadm join[\\s\\S]*?--control-plane[\\s\\S]*?(?=\\n\\n|$)', multiline=True) | trim }}"
+    worker_join_cmd: "{{ kubeadm_init.stdout | regex_search('kubeadm join[\\s\\S]*?--token.*?\\n\\s+--discovery-token-ca-cert-hash\\s+sha256:[0-9a-f]+', multiline=True) | trim }}"
+    cacheable: true
+  when: inventory_hostname == groups['control_plane'][0]
+
+- name: Fallback: Generate worker join command (first CP)
+  when: inventory_hostname == groups['control_plane'][0] and (worker_join_cmd is not defined or worker_join_cmd|length == 0)
+  block:
+    - name: Create token and print join command
+      command: kubeadm token create --print-join-command
+      register: worker_join_out
+    - name: Save worker join cmd
+      set_fact:
+        worker_join_cmd: "{{ worker_join_out.stdout }}"
+        cacheable: true
+
+- name: Install CNI (Calico) (first CP)
+  become_user: "{{ ansible_user }}"
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  shell: kubectl apply -f {{ calico_manifest_url }}
+  when: inventory_hostname == groups['control_plane'][0]
+
+# Secondary control planes join using cp1 facts
+- name: Wait until cp1 exposed join command
+  wait_for:
+    path: /etc/kubernetes/kubelet.conf
+    search_regex: '.'
+    timeout: 1
+  when: false  # dummy to keep structure readable
+
+- name: Join secondary control planes
+  shell: "{{ hostvars[groups['control_plane'][0]].cp_join_cmd }}"
+  args:
+    creates: /etc/kubernetes/kubelet.conf
+  when: inventory_hostname != groups['control_plane'][0]
+
